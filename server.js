@@ -4,7 +4,17 @@ const { Server } = require('socket.io');
 const cors = require('cors');
 
 const app = express();
-app.use(cors());
+
+// Enable CORS for all routes
+app.use(cors({
+  origin: '*',
+  methods: ['GET', 'POST', 'OPTIONS'],
+  credentials: true,
+  allowedHeaders: ['*']
+}));
+
+// Handle preflight requests
+app.options('*', cors());
 
 const httpServer = createServer(app);
 
