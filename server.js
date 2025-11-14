@@ -10,14 +10,20 @@ const httpServer = createServer(app);
 
 const io = new Server(httpServer, {
   cors: {
-    origin: '*', // In production, set to your Vercel domain
-    methods: ['GET', 'POST'],
-    credentials: true
+    origin: '*',
+    methods: ['GET', 'POST', 'OPTIONS'],
+    credentials: true,
+    allowedHeaders: ['*']
   },
-  transports: ['websocket', 'polling'],
+  transports: ['polling', 'websocket'], // Try polling first for Railway
   allowEIO3: true,
   pingTimeout: 60000,
   pingInterval: 25000,
+  upgradeTimeout: 30000,
+  maxHttpBufferSize: 1e8,
+  allowUpgrades: true,
+  perMessageDeflate: false,
+  httpCompression: false,
 });
 
 // Room management
