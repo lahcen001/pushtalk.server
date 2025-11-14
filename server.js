@@ -226,6 +226,36 @@ io.on('connection', (socket) => {
       rooms.delete(roomId);
     }
   }
+
+
+
+
+
+
+});
+socket.on('disconnect', () => {
+  console.log('Client disconnected:', socket.id);
+  
+  // Find and remove user from all rooms
+  rooms.forEach((room, roomId) => {
+    const participantIndex = room.participants.findIndex(p => p.id === socket.id);
+    
+    if (participantIndex !== -1) {
+      // Remove participant
+      room.participants.splice(participantIndex, 1);
+      
+      // Notify others in the room
+      socket.to(roomId).emit('participant_left', { userId: socket.id });
+      
+      console.log(`User ${socket.id} removed from room ${roomId}`);
+      
+      // Clean up empty rooms
+      if (room.participants.length === 0) {
+        rooms.delete(roomId);
+        console.log(`Room ${roomId} deleted (empty)`);
+      }
+    }
+  });
 });
 
 // Health check endpoint
