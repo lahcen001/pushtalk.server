@@ -291,15 +291,24 @@ io.on('connection', (socket) => {
 
     // Check participant limit
     if (room.participants.length >= MAX_PARTICIPANTS_PER_ROOM) {
-      console.log('⚠️ Room is full:', roomId);
+      console.log('⚠️ Room is full:', cleanRoomId);
       socket.emit('error', { message: 'Room is full. Maximum 20 participants allowed.' });
       return;
     }
 
     // Check if locked
-    if (room.locked && room.pin !== cleanPin) {
-      socket.emit('error', { message: 'Invalid PIN' });
-      return;
+    if (room.locked) {
+      if (!cleanPin) {
+        console.log('🔒 Room is locked, requesting PIN:', cleanRoomId);
+        socket.emit('room_requires_pin', { roomId: cleanRoomId });
+        return;
+      }
+      if (room.pin !== cleanPin) {
+        console.log('❌ Invalid PIN provided for room:', cleanRoomId);
+        socket.emit('error', { message: 'Invalid PIN. Please try again.' });
+        return;
+      }
+      console.log('✅ Valid PIN provided for locked room:', cleanRoomId);
     }
 
     // Remove duplicates
