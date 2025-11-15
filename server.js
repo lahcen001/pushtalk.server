@@ -40,6 +40,35 @@ const io = new Server(httpServer, {
 const rooms = new Map();
 const roomCodes = new Map();
 
+// Security limits
+const MAX_ROOMS = 100; // Maximum number of concurrent rooms
+const MAX_PARTICIPANTS_PER_ROOM = 20; // Maximum participants per room
+const MAX_ROOMS_PER_IP = 5; // Maximum rooms created per IP
+const roomCreationByIP = new Map(); // Track room creation by IP
+
+// Cleanup old rooms (empty for more than 1 hour)
+setInterval(() => {
+  const now = Date.now();
+  rooms.forEach((room, roomId) => {
+    if (room.participants.length === 0) {
+      if (!room.emptyAt) {
+        room.emptyAt = now;
+      } else if (now - room.emptyAt > 3600000) { // 1 hour
+        console.log(`🧹 Cleaning up empty room: ${roomId}`);
+        rooms.delete(roomId);
+        // Remove from roomCodes
+        roomCodes.forEach((uuid, code) => {
+          if (uuid === roomId) {
+            roomCodes.delete(code);
+          }
+        });
+      }
+    } else {
+      delete room.emptyAt;
+    }
+  });
+}, 300000); // Check every 5 minutes
+
 // Rate limiting
 const rateLimiter = {
   requests: new Map(),
@@ -72,6 +101,29 @@ io.on('connection', (socket) => {
   // Register room code
   socket.on('register_room_code', ({ shortCode, uuid }) => {
     console.log('📝 Registering:', { shortCode, uuid });
+    
+    // Check if max rooms limit reached
+    if (rooms.size >= MAX_ROOMS) {
+      console.log('⚠️ Max rooms limit reached');
+      socket.emit('error', { message: 'Server is at capacity. Please try again later.' });
+      return;
+    }
+    
+    // Check IP-based room creation limit
+    const clientIP = socket.handshake.address;
+    const ipRooms = roomCreationByIP.get(clientIP) || [];
+    const recentRooms = ipRooms.filter(time => Date.now() - time < 3600000); // Last hour
+    
+    if (recentRooms.length >= MAX_ROOMS_PER_IP) {
+      console.log('⚠️ IP room creation limit reached:', clientIP);
+      socket.emit('error', { message: 'Too many rooms created. Please wait before creating more.' });
+      return;
+    }
+    
+    // Track room creation
+    recentRooms.push(Date.now());
+    roomCreationByIP.set(clientIP, recentRooms);
+    
     roomCodes.set(shortCode, uuid);
     socket.emit('room_code_registered', { shortCode, uuid });
   });
@@ -109,6 +161,13 @@ io.on('connection', (socket) => {
     if (!room) {
       room = { participants: [], locked: false, pin: null };
       rooms.set(roomId, room);
+    }
+
+    // Check participant limit
+    if (room.participants.length >= MAX_PARTICIPANTS_PER_ROOM) {
+      console.log('⚠️ Room is full:', roomId);
+      socket.emit('error', { message: 'Room is full. Maximum 20 participants allowed.' });
+      return;
     }
 
     // Check if locked
