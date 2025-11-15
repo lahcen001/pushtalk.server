@@ -86,6 +86,18 @@ io.on('connection', (socket) => {
     }
   });
 
+  // Get room participant count
+  socket.on('get_room_participant_count', ({ shortCode }) => {
+    const uuid = roomCodes.get(shortCode);
+    if (uuid) {
+      const room = rooms.get(uuid);
+      const count = room ? room.participants.length : 0;
+      socket.emit('room_participant_count', { shortCode, count });
+    } else {
+      socket.emit('room_participant_count', { shortCode, count: 0 });
+    }
+  });
+
   // Join room
   socket.on('join_room', ({ roomId, displayName, pin }) => {
     if (!roomId || !displayName) {
