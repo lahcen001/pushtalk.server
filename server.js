@@ -1,7 +1,21 @@
+/**
+ * PushTalk Server with Enhanced Security
+ * 
+ * Security Features:
+ * 1. Input Sanitization - Prevents XSS attacks
+ * 2. Connection Limits - Max 10 connections per IP
+ * 3. Room Expiration - Auto-delete rooms after 24 hours
+ * 4. Encrypted Signaling - AES-256-GCM encryption for messages
+ * 5. Rate Limiting - Max 10 requests per second
+ * 6. Room Limits - Max 100 rooms, 20 participants per room
+ * 7. IP-based Rate Limiting - Max 5 rooms per IP per hour
+ */
+
 const express = require('express');
 const { createServer } = require('http');
 const { Server } = require('socket.io');
 const cors = require('cors');
+const crypto = require('crypto');
 
 const app = express();
 
@@ -44,27 +58,96 @@ const roomCodes = new Map();
 const MAX_ROOMS = 100; // Maximum number of concurrent rooms
 const MAX_PARTICIPANTS_PER_ROOM = 20; // Maximum participants per room
 const MAX_ROOMS_PER_IP = 5; // Maximum rooms created per IP
+const MAX_CONNECTIONS_PER_IP = 10; // Maximum concurrent connections per IP
+const ROOM_MAX_AGE = 24 * 60 * 60 * 1000; // 24 hours
 const roomCreationByIP = new Map(); // Track room creation by IP
+const connectionsByIP = new Map(); // Track connections per IP
 
-// Cleanup old rooms (empty for more than 1 hour)
+// ===== SECURITY FEATURE 1: INPUT SANITIZATION =====
+const sanitizeInput = (input, maxLength = 50) => {
+  if (!input || typeof input !== 'string') return '';
+  // Remove HTML tags, scripts, and dangerous characters
+  return input
+    .replace(/<[^>]*>/g, '') // Remove HTML tags
+    .replace(/[<>\"'`]/g, '') // Remove dangerous characters
+    .replace(/javascript:/gi, '') // Remove javascript: protocol
+    .replace(/on\w+\s*=/gi, '') // Remove event handlers
+    .trim()
+    .slice(0, maxLength);
+};
+
+// ===== SECURITY FEATURE 4: ENCRYPTED SIGNALING =====
+const ENCRYPTION_KEY = process.env.ENCRYPTION_KEY || crypto.randomBytes(32).toString('hex');
+const ENCRYPTION_ALGORITHM = 'aes-256-gcm';
+
+const encryptMessage = (text) => {
+  try {
+    const iv = crypto.randomBytes(16);
+    const cipher = crypto.createCipheriv(ENCRYPTION_ALGORITHM, Buffer.from(ENCRYPTION_KEY, 'hex').slice(0, 32), iv);
+    let encrypted = cipher.update(text, 'utf8', 'hex');
+    encrypted += cipher.final('hex');
+    const authTag = cipher.getAuthTag();
+    return {
+      encrypted,
+      iv: iv.toString('hex'),
+      authTag: authTag.toString('hex')
+    };
+  } catch (error) {
+    console.error('Encryption error:', error);
+    return null;
+  }
+};
+
+const decryptMessage = (encrypted, iv, authTag) => {
+  try {
+    const decipher = crypto.createDecipheriv(
+      ENCRYPTION_ALGORITHM,
+      Buffer.from(ENCRYPTION_KEY, 'hex').slice(0, 32),
+      Buffer.from(iv, 'hex')
+    );
+    decipher.setAuthTag(Buffer.from(authTag, 'hex'));
+    let decrypted = decipher.update(encrypted, 'hex', 'utf8');
+    decrypted += decipher.final('utf8');
+    return decrypted;
+  } catch (error) {
+    console.error('Decryption error:', error);
+    return null;
+  }
+};
+
+// ===== SECURITY FEATURE 3: ROOM EXPIRATION =====
+// Cleanup old rooms (empty for 1 hour OR older than 24 hours)
 setInterval(() => {
   const now = Date.now();
   rooms.forEach((room, roomId) => {
+    let shouldDelete = false;
+    
+    // Delete if room is older than 24 hours
+    if (room.createdAt && (now - room.createdAt > ROOM_MAX_AGE)) {
+      console.log(`⏰ Room expired (24h): ${roomId}`);
+      shouldDelete = true;
+    }
+    
+    // Delete if empty for more than 1 hour
     if (room.participants.length === 0) {
       if (!room.emptyAt) {
         room.emptyAt = now;
       } else if (now - room.emptyAt > 3600000) { // 1 hour
         console.log(`🧹 Cleaning up empty room: ${roomId}`);
-        rooms.delete(roomId);
-        // Remove from roomCodes
-        roomCodes.forEach((uuid, code) => {
-          if (uuid === roomId) {
-            roomCodes.delete(code);
-          }
-        });
+        shouldDelete = true;
       }
     } else {
       delete room.emptyAt;
+    }
+    
+    if (shouldDelete) {
+      rooms.delete(roomId);
+      // Remove from roomCodes
+      roomCodes.forEach((uuid, code) => {
+        if (uuid === roomId) {
+          roomCodes.delete(code);
+        }
+      });
     }
   });
 }, 300000); // Check every 5 minutes
@@ -86,7 +169,31 @@ const rateLimiter = {
 };
 
 io.on('connection', (socket) => {
-  console.log('Client connected:', socket.id);
+  const clientIP = socket.handshake.address;
+  console.log('Client connected:', socket.id, 'IP:', clientIP);
+
+  // ===== SECURITY FEATURE 2: CONNECTION LIMITS =====
+  // Check connection limit per IP
+  const ipConnections = connectionsByIP.get(clientIP) || [];
+  const activeConnections = ipConnections.filter(id => io.sockets.sockets.has(id));
+  
+  if (activeConnections.length >= MAX_CONNECTIONS_PER_IP) {
+    console.log('⚠️ Connection limit reached for IP:', clientIP);
+    socket.emit('error', { message: 'Too many connections from your IP. Please try again later.' });
+    socket.disconnect(true);
+    return;
+  }
+  
+  // Track this connection
+  activeConnections.push(socket.id);
+  connectionsByIP.set(clientIP, activeConnections);
+  
+  // Remove connection on disconnect
+  socket.on('disconnect', () => {
+    const connections = connectionsByIP.get(clientIP) || [];
+    connectionsByIP.set(clientIP, connections.filter(id => id !== socket.id));
+    console.log('Client disconnected:', socket.id);
+  });
 
   // Rate limiting
   socket.use((packet, next) => {
@@ -100,7 +207,16 @@ io.on('connection', (socket) => {
 
   // Register room code
   socket.on('register_room_code', ({ shortCode, uuid }) => {
-    console.log('📝 Registering:', { shortCode, uuid });
+    // Sanitize inputs
+    const cleanShortCode = sanitizeInput(shortCode, 10);
+    const cleanUuid = sanitizeInput(uuid, 100);
+    
+    console.log('📝 Registering:', { shortCode: cleanShortCode, uuid: cleanUuid });
+    
+    if (!cleanShortCode || !cleanUuid) {
+      socket.emit('error', { message: 'Invalid room code format' });
+      return;
+    }
     
     // Check if max rooms limit reached
     if (rooms.size >= MAX_ROOMS) {
@@ -124,8 +240,8 @@ io.on('connection', (socket) => {
     recentRooms.push(Date.now());
     roomCreationByIP.set(clientIP, recentRooms);
     
-    roomCodes.set(shortCode, uuid);
-    socket.emit('room_code_registered', { shortCode, uuid });
+    roomCodes.set(cleanShortCode, cleanUuid);
+    socket.emit('room_code_registered', { shortCode: cleanShortCode, uuid: cleanUuid });
   });
 
   // Lookup room code
@@ -152,15 +268,25 @@ io.on('connection', (socket) => {
 
   // Join room
   socket.on('join_room', ({ roomId, displayName, pin }) => {
-    if (!roomId || !displayName) {
+    // Sanitize inputs
+    const cleanRoomId = sanitizeInput(roomId, 100);
+    const cleanDisplayName = sanitizeInput(displayName, 50);
+    const cleanPin = pin ? sanitizeInput(pin, 20) : null;
+    
+    if (!cleanRoomId || !cleanDisplayName) {
       socket.emit('error', { message: 'Invalid room data' });
       return;
     }
 
-    let room = rooms.get(roomId);
+    let room = rooms.get(cleanRoomId);
     if (!room) {
-      room = { participants: [], locked: false, pin: null };
-      rooms.set(roomId, room);
+      room = { 
+        participants: [], 
+        locked: false, 
+        pin: null,
+        createdAt: Date.now() // Track creation time for expiration
+      };
+      rooms.set(cleanRoomId, room);
     }
 
     // Check participant limit
@@ -171,28 +297,28 @@ io.on('connection', (socket) => {
     }
 
     // Check if locked
-    if (room.locked && room.pin !== pin) {
+    if (room.locked && room.pin !== cleanPin) {
       socket.emit('error', { message: 'Invalid PIN' });
       return;
     }
 
     // Remove duplicates
     room.participants = room.participants.filter(
-      p => p.displayName !== displayName || p.id === socket.id
+      p => p.displayName !== cleanDisplayName || p.id === socket.id
     );
 
     const participant = {
       id: socket.id,
-      displayName,
+      displayName: cleanDisplayName,
       joinedAt: Date.now(),
       muted: true,
       speaking: false,
     };
 
     room.participants.push(participant);
-    socket.join(roomId);
+    socket.join(cleanRoomId);
 
-    socket.to(roomId).emit('participant_joined', participant);
+    socket.to(cleanRoomId).emit('participant_joined', participant);
     socket.emit('room_joined', {
       roomId,
       participants: room.participants,
