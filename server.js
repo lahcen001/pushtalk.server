@@ -279,14 +279,22 @@ io.on('connection', (socket) => {
     }
 
     let room = rooms.get(cleanRoomId);
+    const isFirstParticipant = !room || room.participants.length === 0;
+    
     if (!room) {
       room = { 
         participants: [], 
         locked: false, 
         pin: null,
-        createdAt: Date.now() // Track creation time for expiration
+        createdAt: Date.now(), // Track creation time for expiration
+        creatorId: null // Track room creator
       };
       rooms.set(cleanRoomId, room);
+    }
+    
+    // Set creator if this is the first participant
+    if (isFirstParticipant) {
+      room.creatorId = socket.id;
     }
 
     // Check participant limit
@@ -322,6 +330,7 @@ io.on('connection', (socket) => {
       joinedAt: Date.now(),
       muted: true,
       speaking: false,
+      isAdmin: socket.id === room.creatorId, // Mark creator as admin
     };
 
     room.participants.push(participant);
@@ -332,6 +341,7 @@ io.on('connection', (socket) => {
       roomId,
       participants: room.participants,
       locked: room.locked,
+      isAdmin: socket.id === room.creatorId, // Tell user if they're admin
     });
 
     console.log(`${displayName} joined room ${roomId}`);
@@ -342,19 +352,28 @@ io.on('connection', (socket) => {
     handleLeaveRoom(socket, roomId);
   });
 
-  // Lock room
+  // Lock room (admin only)
   socket.on('lock_room', ({ roomId, pin, locked }) => {
     const room = rooms.get(roomId);
     if (!room) return;
+
+    // Check if user is admin (room creator)
+    if (socket.id !== room.creatorId) {
+      console.log('⚠️ Non-admin tried to lock room:', socket.id);
+      socket.emit('error', { message: 'Only the room creator can lock/unlock the room.' });
+      return;
+    }
 
     if (locked && pin) {
       room.locked = true;
       room.pin = pin;
       io.to(roomId).emit('room_locked', { roomId });
+      console.log('🔒 Room locked by admin:', roomId);
     } else {
       room.locked = false;
       room.pin = null;
       io.to(roomId).emit('room_unlocked', { roomId });
+      console.log('🔓 Room unlocked by admin:', roomId);
     }
   });
 
