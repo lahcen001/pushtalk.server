@@ -288,7 +288,7 @@ io.on('connection', (socket) => {
         pin: null,
         createdAt: Date.now(), // Track creation time for expiration
         creatorId: null, // Track room creator
-        bannedUsers: new Set() // Track kicked/banned users by socket ID
+        bannedUsers: new Set() // Track kicked/banned users by display name
       };      rooms.set(cleanRoomId, room);
     }
     
@@ -298,9 +298,9 @@ io.on('connection', (socket) => {
     }
 
 
-    // Check if user is banned from this room
-    if (room.bannedUsers && room.bannedUsers.has(socket.id)) {
-      console.log('🚫 Banned user attempting to rejoin:', socket.id);
+    // Check if user is banned from this room (by display name)
+    if (room.bannedUsers && room.bannedUsers.has(cleanDisplayName)) {
+      console.log('🚫 Banned user attempting to rejoin:', cleanDisplayName);
       socket.emit('error', { message: 'You have been removed from this room and cannot rejoin.' });
       return;
     }
@@ -475,22 +475,27 @@ io.on('connection', (socket) => {
         socket.emit('error', { message: 'Participant not found in room' });
         return;
       }
+      // Get participant info before removing
+      const kickedParticipant = room.participants.find(p => p.id === participantId);
+      const kickedDisplayName = kickedParticipant ? kickedParticipant.displayName : null;
 
       // Notify the kicked participant
       io.to(participantId).emit('kicked_from_room', {
         roomId,
-        message: 'You have been removed from the room by the admin',
+        message: 'You have been removed from this room by the admin',
       });
 
       // Remove participant from room
       room.participants = room.participants.filter(p => p.id !== participantId);
-
-      // Add user to banned list to prevent rejoin
-      if (!room.bannedUsers) {
-        room.bannedUsers = new Set();
+      
+      // Add user to banned list by display name to prevent rejoin
+      if (kickedDisplayName) {
+        if (!room.bannedUsers) {
+          room.bannedUsers = new Set();
+        }
+        room.bannedUsers.add(kickedDisplayName);
+        console.log(`🚫 Added "${kickedDisplayName}" to banned list for room ${roomId}`);
       }
-      room.bannedUsers.add(participantId);
-      console.log(`🚫 Added ${participantId} to banned list for room ${roomId}`);
 
       // Force disconnect the participant from the room
       const participantSocket = io.sockets.sockets.get(participantId);
