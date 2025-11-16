@@ -11,7 +11,6 @@
  * 7. IP-based Rate Limiting - Max 5 rooms per IP per hour
  */
 
-require('dotenv').config();
 const express = require('express');
 const { createServer } = require('http');
 const { Server } = require('socket.io');
@@ -168,27 +167,6 @@ const rateLimiter = {
     return true;
   }
 };
-
-// ===== API SECRET AUTHENTICATION =====
-const API_SECRET = process.env.API_SECRET || 'change-this-secret-key';
-
-// Middleware to validate API secret
-io.use((socket, next) => {
-  const apiSecret = socket.handshake.auth.apiSecret;
-  
-  if (!apiSecret) {
-    console.log('❌ Connection rejected: No API secret provided');
-    return next(new Error('Authentication required'));
-  }
-  
-  if (apiSecret !== API_SECRET) {
-    console.log('❌ Connection rejected: Invalid API secret');
-    return next(new Error('Invalid authentication'));
-  }
-  
-  console.log('✅ API authentication successful');
-  next();
-});
 
 io.on('connection', (socket) => {
   const clientIP = socket.handshake.address;

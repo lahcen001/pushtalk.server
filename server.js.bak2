@@ -11,7 +11,6 @@
  * 7. IP-based Rate Limiting - Max 5 rooms per IP per hour
  */
 
-require('dotenv').config();
 const express = require('express');
 const { createServer } = require('http');
 const { Server } = require('socket.io');
@@ -169,27 +168,6 @@ const rateLimiter = {
   }
 };
 
-// ===== API SECRET AUTHENTICATION =====
-const API_SECRET = process.env.API_SECRET || 'change-this-secret-key';
-
-// Middleware to validate API secret
-io.use((socket, next) => {
-  const apiSecret = socket.handshake.auth.apiSecret;
-  
-  if (!apiSecret) {
-    console.log('❌ Connection rejected: No API secret provided');
-    return next(new Error('Authentication required'));
-  }
-  
-  if (apiSecret !== API_SECRET) {
-    console.log('❌ Connection rejected: Invalid API secret');
-    return next(new Error('Invalid authentication'));
-  }
-  
-  console.log('✅ API authentication successful');
-  next();
-});
-
 io.on('connection', (socket) => {
   const clientIP = socket.handshake.address;
   console.log('Client connected:', socket.id, 'IP:', clientIP);
@@ -292,7 +270,7 @@ io.on('connection', (socket) => {
   socket.on('join_room', ({ roomId, displayName, pin }) => {
     // Sanitize inputs
     const cleanRoomId = sanitizeInput(roomId, 100);
-    const cleanDisplayName = sanitizeInput(displayName, 20);
+    const cleanDisplayName = sanitizeInput(displayName, 50);
     const cleanPin = pin ? sanitizeInput(pin, 20) : null;
     
     if (!cleanRoomId || !cleanDisplayName) {
@@ -309,9 +287,9 @@ io.on('connection', (socket) => {
         locked: false, 
         pin: null,
         createdAt: Date.now(), // Track creation time for expiration
-        creatorId: null, // Track room creator
-        bannedUsers: new Set() // Track kicked/banned users by display name
-      };      rooms.set(cleanRoomId, room);
+        creatorId: null // Track room creator
+      };
+      rooms.set(cleanRoomId, room);
     }
     
     // Set creator if this is the first participant
@@ -319,13 +297,6 @@ io.on('connection', (socket) => {
       room.creatorId = socket.id;
     }
 
-
-    // Check if user is banned from this room (by display name)
-    if (room.bannedUsers && room.bannedUsers.has(cleanDisplayName)) {
-      console.log('🚫 Banned user attempting to rejoin:', cleanDisplayName);
-      socket.emit('error', { message: 'You have been removed from this room and cannot rejoin.' });
-      return;
-    }
     // Check participant limit
     if (room.participants.length >= MAX_PARTICIPANTS_PER_ROOM) {
       console.log('⚠️ Room is full:', cleanRoomId);
@@ -497,27 +468,15 @@ io.on('connection', (socket) => {
         socket.emit('error', { message: 'Participant not found in room' });
         return;
       }
-      // Get participant info before removing
-      const kickedParticipant = room.participants.find(p => p.id === participantId);
-      const kickedDisplayName = kickedParticipant ? kickedParticipant.displayName : null;
 
       // Notify the kicked participant
       io.to(participantId).emit('kicked_from_room', {
         roomId,
-        message: 'You have been removed from this room by the admin',
+        message: 'You have been removed from the room by the admin',
       });
 
       // Remove participant from room
       room.participants = room.participants.filter(p => p.id !== participantId);
-      
-      // Add user to banned list by display name to prevent rejoin
-      if (kickedDisplayName) {
-        if (!room.bannedUsers) {
-          room.bannedUsers = new Set();
-        }
-        room.bannedUsers.add(kickedDisplayName);
-        console.log(`🚫 Added "${kickedDisplayName}" to banned list for room ${roomId}`);
-      }
 
       // Force disconnect the participant from the room
       const participantSocket = io.sockets.sockets.get(participantId);
