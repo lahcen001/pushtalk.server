@@ -270,7 +270,7 @@ io.on('connection', (socket) => {
   socket.on('join_room', ({ roomId, displayName, pin }) => {
     // Sanitize inputs
     const cleanRoomId = sanitizeInput(roomId, 100);
-    const cleanDisplayName = sanitizeInput(displayName, 50);
+    const cleanDisplayName = sanitizeInput(displayName, 20);
     const cleanPin = pin ? sanitizeInput(pin, 20) : null;
     
     if (!cleanRoomId || !cleanDisplayName) {
