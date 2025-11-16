@@ -432,6 +432,71 @@ io.on('connection', (socket) => {
     });
   });
 
+  // Kick participant (admin only)
+  socket.on('kick_participant', (data) => {
+    console.log('🔔 kick_participant event received!', data);
+    try {
+      const { roomId, participantId } = data;
+      console.log(`👢 Kick request: Admin ${socket.id} wants to kick ${participantId} from ${roomId}`);
+      
+      const room = rooms.get(roomId);
+      
+      if (!room) {
+        console.log('❌ Room not found');
+        socket.emit('error', { message: 'Room not found' });
+        return;
+      }
+
+      console.log(`🔍 Room creator: ${room.creatorId}, Requester: ${socket.id}`);
+
+      // Only room creator (admin) can kick participants
+      if (socket.id !== room.creatorId) {
+        console.log('❌ Not admin');
+        socket.emit('error', { message: 'Only the admin can remove participants' });
+        return;
+      }
+
+      // Cannot kick yourself
+      if (participantId === socket.id) {
+        socket.emit('error', { message: 'You cannot remove yourself' });
+        return;
+      }
+
+      // Check if participant exists in room
+      const participantExists = room.participants.some(p => p.id === participantId);
+      if (!participantExists) {
+        socket.emit('error', { message: 'Participant not found in room' });
+        return;
+      }
+
+      // Notify the kicked participant
+      io.to(participantId).emit('kicked_from_room', {
+        roomId,
+        message: 'You have been removed from the room by the admin',
+      });
+
+      // Remove participant from room
+      room.participants = room.participants.filter(p => p.id !== participantId);
+
+      // Force disconnect the participant from the room
+      const participantSocket = io.sockets.sockets.get(participantId);
+      if (participantSocket) {
+        participantSocket.leave(roomId);
+      }
+
+      // Notify all remaining participants
+      io.to(roomId).emit('participant_left', { userId: participantId });
+
+      // Confirm success to admin
+      socket.emit('participant_kicked_success', { participantId });
+
+      console.log(`👢 Admin ${socket.id} kicked participant ${participantId} from room ${roomId}`);
+    } catch (error) {
+      console.error('Error kicking participant:', error);
+      socket.emit('error', { message: 'Failed to remove participant' });
+    }
+  });
+
   // Disconnect
   socket.on('disconnect', () => {
     console.log('Client disconnected:', socket.id);
