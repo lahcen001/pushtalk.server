@@ -287,9 +287,9 @@ io.on('connection', (socket) => {
         locked: false, 
         pin: null,
         createdAt: Date.now(), // Track creation time for expiration
-        creatorId: null // Track room creator
-      };
-      rooms.set(cleanRoomId, room);
+        creatorId: null, // Track room creator
+        bannedUsers: new Set() // Track kicked/banned users by socket ID
+      };      rooms.set(cleanRoomId, room);
     }
     
     // Set creator if this is the first participant
@@ -297,6 +297,13 @@ io.on('connection', (socket) => {
       room.creatorId = socket.id;
     }
 
+
+    // Check if user is banned from this room
+    if (room.bannedUsers && room.bannedUsers.has(socket.id)) {
+      console.log('🚫 Banned user attempting to rejoin:', socket.id);
+      socket.emit('error', { message: 'You have been removed from this room and cannot rejoin.' });
+      return;
+    }
     // Check participant limit
     if (room.participants.length >= MAX_PARTICIPANTS_PER_ROOM) {
       console.log('⚠️ Room is full:', cleanRoomId);
@@ -477,6 +484,13 @@ io.on('connection', (socket) => {
 
       // Remove participant from room
       room.participants = room.participants.filter(p => p.id !== participantId);
+
+      // Add user to banned list to prevent rejoin
+      if (!room.bannedUsers) {
+        room.bannedUsers = new Set();
+      }
+      room.bannedUsers.add(participantId);
+      console.log(`🚫 Added ${participantId} to banned list for room ${roomId}`);
 
       // Force disconnect the participant from the room
       const participantSocket = io.sockets.sockets.get(participantId);
