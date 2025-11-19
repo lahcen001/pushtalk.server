@@ -304,16 +304,6 @@ io.on('connection', (socket) => {
     const isFirstParticipant = !room || room.participants.length === 0;
     
     if (!room) {
-      room = { 
-        participants: [], 
-        locked: false, 
-        pin: null,
-        createdAt: Date.now(), // Track creation time for expiration
-        creatorId: null, // Track room creator
-        bannedUsers: new Set(), // Track kicked/banned users by display name
-        currentSpeaker: null, // Track who has the floor
-        floorTimeout: null // Auto-release floor after 30s
-      };
     }
     
     // Set creator if this is the first participant
@@ -431,80 +421,20 @@ io.on('connection', (socket) => {
       speaking: true,
     });
   });
-  // PTT events with floor control
-  socket.on('ptt:down', ({ roomId }) => {
-    const room = rooms.get(roomId);
-    if (!room) return;
-
-    // Check if someone else has the floor
-    if (room.currentSpeaker && room.currentSpeaker !== socket.id) {
-      console.log(`⛔ Floor busy: ${socket.id} tried to talk while ${room.currentSpeaker} is speaking`);
-      socket.emit('floor_busy', { 
-        currentSpeaker: room.currentSpeaker,
-        message: 'Someone else is talking. Please wait.'
-      });
-      return;
-    }
-
-    // Grant floor to this user
-    room.currentSpeaker = socket.id;
-    console.log(`🎤 Floor granted to: ${socket.id}`);
-
-    // Clear any existing floor timeout
-    if (room.floorTimeout) {
-      clearTimeout(room.floorTimeout);
-    }
-
-    // Auto-release floor after 30 seconds
-    room.floorTimeout = setTimeout(() => {
-      if (room.currentSpeaker === socket.id) {
-        console.log(`⏱️ Auto-releasing floor for: ${socket.id}`);
-        room.currentSpeaker = null;
-        room.floorTimeout = null;
-        
-        // Notify all participants that floor is released
-        io.to(roomId).emit('participant_speaking', {
-          userId: socket.id,
-          speaking: false,
-        });
-        io.to(roomId).emit('floor_released', { userId: socket.id });
-      }
-    }, 30000);
-
-    // Notify all participants
-    socket.to(roomId).emit('participant_speaking', {
-      userId: socket.id,
-      speaking: true,
-    });
-    socket.to(roomId).emit('floor_taken', { userId: socket.id });
-  });
 
   socket.on('ptt:up', ({ roomId }) => {
-    const room = rooms.get(roomId);
-    if (!room) return;
-
-    // Only the current speaker can release the floor
-    if (room.currentSpeaker !== socket.id) {
-      console.log(`⚠️ ${socket.id} tried to release floor but doesn't have it`);
-      return;
-    }
-
-    // Release the floor
-    room.currentSpeaker = null;
-    console.log(`🎤 Floor released by: ${socket.id}`);
-
-    // Clear floor timeout
-    if (room.floorTimeout) {
-      clearTimeout(room.floorTimeout);
-      room.floorTimeout = null;
-    }
-
-    // Notify all participants
     socket.to(roomId).emit('participant_speaking', {
       userId: socket.id,
       speaking: false,
     });
-    io.to(roomId).emit('floor_released', { userId: socket.id });
+  });
+
+  // Start speaking event
+  socket.on('start_speaking', ({ roomId }) => {
+    socket.to(roomId).emit('participant_speaking', {
+      userId: socket.id,
+      speaking: true,
+    });
   });
 
   // Mute status
