@@ -301,7 +301,6 @@ io.on('connection', (socket) => {
     }
 
     let room = rooms.get(cleanRoomId);
-    const isFirstParticipant = !room || room.participants.length === 0;
     
     if (!room) {
       room = { 
@@ -314,13 +313,8 @@ io.on('connection', (socket) => {
         currentSpeaker: null, // Track who has the floor
         floorTimeout: null // Auto-release floor after 30s
       };
+      rooms.set(cleanRoomId, room);
     }
-    
-    // Set creator if this is the first participant
-    if (isFirstParticipant) {
-      room.creatorId = socket.id;
-    }
-
 
     // Check if user is banned from this room (by display name)
     if (room.bannedUsers && room.bannedUsers.has(cleanDisplayName)) {
@@ -328,6 +322,24 @@ io.on('connection', (socket) => {
       socket.emit('error', { message: 'You have been removed from this room and cannot rejoin.' });
       return;
     }
+
+    // Remove ALL duplicates FIRST (handles refresh/reconnect)
+    const duplicates = room.participants.filter(p => p.displayName === cleanDisplayName && p.id !== socket.id);
+    if (duplicates.length > 0) {
+      console.log(`🔄 Removing ${duplicates.length} duplicate participant(s) for: ${cleanDisplayName}`);
+      duplicates.forEach(dup => {
+        room.participants = room.participants.filter(p => p.id !== dup.id);
+        // Notify ALL participants (including new joiner) that old participant left
+        io.to(cleanRoomId).emit('participant_left', { userId: dup.id });
+      });
+    }
+
+    // Set creator if this is the first participant (check AFTER removing duplicates)
+    if (!room.creatorId && room.participants.length === 0) {
+      room.creatorId = socket.id;
+      console.log(`👑 ${socket.id} is now the room admin for ${cleanRoomId}`);
+    }
+
     // Check participant limit
     if (room.participants.length >= MAX_PARTICIPANTS_PER_ROOM) {
       console.log('⚠️ Room is full:', cleanRoomId);
@@ -349,11 +361,6 @@ io.on('connection', (socket) => {
       }
       console.log('✅ Valid PIN provided for locked room:', cleanRoomId);
     }
-
-    // Remove duplicates
-    room.participants = room.participants.filter(
-      p => p.displayName !== cleanDisplayName || p.id === socket.id
-    );
 
     const participant = {
       id: socket.id,
